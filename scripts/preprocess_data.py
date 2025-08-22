@@ -8,8 +8,8 @@ import json
 
 def preprocess_varimnist():
     """预处理 variMNIST 数据"""
-    # 加载 CSV
-    csv_path = 'variMNIST/df_DigitRecog.csv'
+    # 加载 CSV (更新路径)
+    csv_path = '/content/gdrive/MyDrive/battleday_varimnist/variMNIST/varMNIST/df_DigitRecog.csv'
     df = pd.read_csv(csv_path)
     
     print("CSV 列名:", df.columns.tolist())
@@ -27,7 +27,8 @@ def preprocess_varimnist():
         if 'dataset_PNG/' in stimulus_path:
             stimulus_path = stimulus_path.replace('dataset_PNG/', '')
         
-        full_path = os.path.join('variMNIST/dataset_PNG', stimulus_path)
+        # 更新路径
+        full_path = os.path.join('/content/gdrive/MyDrive/battleday_varimnist/variMNIST/varMNIST/dataset_PNG', stimulus_path)
         
         # 检查文件是否存在
         if os.path.exists(full_path):
@@ -45,6 +46,8 @@ def preprocess_varimnist():
                 soft_label[true_label] = 1.0
             
             softlabels.append(soft_label)
+        else:
+            print(f"文件不存在: {full_path}")
     
     print(f"成功处理 {len(image_paths)} 张图像")
     
@@ -71,9 +74,9 @@ def preprocess_varimnist():
     print(f"最终标签形状: {softlabels.shape}")
     
     # 保存预处理数据
-    os.makedirs("data/processed", exist_ok=True)
-    np.save("data/processed/images.npy", images)
-    np.save("data/processed/softlabels.npy", softlabels)
+    os.makedirs("/content/gdrive/MyDrive/battleday_varimnist/data/processed", exist_ok=True)
+    np.save("/content/gdrive/MyDrive/battleday_varimnist/data/processed/images.npy", images)
+    np.save("/content/gdrive/MyDrive/battleday_varimnist/data/processed/softlabels.npy", softlabels)
     
     # 创建数据划分
     n_samples = len(images)
@@ -87,7 +90,7 @@ def preprocess_varimnist():
         "test": indices[val_split:].tolist()
     }
     
-    with open("data/splits.json", "w") as f:
+    with open("/content/gdrive/MyDrive/battleday_varimnist/data/splits.json", "w") as f:
         json.dump(splits, f)
     
     print("数据预处理完成!")
