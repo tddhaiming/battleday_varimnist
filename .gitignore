@@ -1,0 +1,7 @@
+# 大文件 / 缓存
+data/
+*.zip
+*.npy
+*.pth
+__pycache__/
+.ipynb_checkpoints
