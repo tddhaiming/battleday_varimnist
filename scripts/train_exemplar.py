@@ -3,6 +3,13 @@ import torch
 import torch.nn as nn
 import numpy as np
 import os
+import sys
+
+# 将项目根目录添加到 Python 路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+    
 from models.exemplar import ExemplarModel
 from utils.data_utils import get_train_val_features
 from utils.metrics import evaluate_model
