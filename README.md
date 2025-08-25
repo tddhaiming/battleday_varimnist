@@ -1,0 +1,1 @@
+本仓库将variMNIST数据集应用于battleday论文中的prototype模型和exemplar模型中
