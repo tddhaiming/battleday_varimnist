@@ -18,6 +18,28 @@ import time
 # --- 内存管理设置 ---
 # 如果你的 PyTorch 版本支持，可以设置以下环境变量来减少内存碎片
 # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+def compute_top1_accuracy(preds, targets):
+    """
+    计算 Top-1 Accuracy (基于 argmax)。
+    衡量模型预测的最可能类别与人类最倾向类别匹配的比例。
+    """
+    if preds.shape != targets.shape:
+        raise ValueError("preds and targets must have the same shape")
+
+    # 获取模型预测的类别 (每个样本预测概率最高的类别)
+    predicted_classes = np.argmax(preds, axis=1)  # (N,)
+    
+    # 获取人类最倾向的类别 (每个样本人类响应概率最高的类别)
+    true_classes = np.argmax(targets, axis=1)     # (N,)
+    
+    # 计算预测正确的样本数
+    correct_predictions = np.sum(predicted_classes == true_classes)
+    
+    # 计算准确率
+    total_samples = preds.shape[0]
+    accuracy = (correct_predictions / total_samples) * 100.0
+    
+    return accuracy
 
 def compute_expected_accuracy(preds, targets):
     """
@@ -70,7 +92,7 @@ def compute_aic(nll, k):
     """计算 AIC"""
     return 2 * k - 2 * (-nll)
 
-def train_exemplar_model(model_name='resnet18', epochs=30): # 进一步减少 epochs
+def train_exemplar_model(model_name='resnet18', epochs=80): # 进一步减少 epochs
     """
     训练 Exemplar 模型，使用所有可用的训练样本，并采用内存优化策略。
     """
@@ -153,8 +175,9 @@ def train_exemplar_model(model_name='resnet18', epochs=30): # 进一步减少 ep
 
     # --- 6. 保存模型 ---
     # 注意：保存时可能需要特殊处理大的 Exemplar 数据
-    os.makedirs("/content/gdrive/MyDrive/battleday_varimnist/results", exist_ok=True)
-    model_save_path = f"/content/gdrive/MyDrive/battleday_varimnist/results/exemplar_{model_name}_full.pth"
+    result_dir = "/mnt/dataset0/thm/code/battleday_varimnist/results"
+    os.makedirs(result_dir, exist_ok=True)
+    model_save_path = f"{result_dir}/exemplar_{model_name}_full.pth"
     
     # 为了避免 pickle 大数组的问题，可以只保存模型状态和关键参数
     torch.save({
@@ -195,18 +218,20 @@ def train_exemplar_model(model_name='resnet18', epochs=30): # 进一步减少 ep
             # 释放批次数据
             # del X_val_tensor, preds_batch
     
-    all_preds = np.vstack(all_preds)
-    all_targets = np.vstack(all_targets)
+    preds = np.vstack(all_preds)
+    targets = np.vstack(all_targets)
     
     # --- 8. 计算最终指标 ---
+    top1_acc = compute_top1_accuracy(preds, targets)
     exp_acc = compute_expected_accuracy(preds, targets)
-    nll = compute_nll(all_preds, all_targets)
-    spearman = compute_spearman_per_image(all_preds, all_targets) # 使用符合原文的 Spearman
+    nll = compute_nll(preds, targets)
+    spearman = compute_spearman_per_image(preds, targets) # 使用符合原文的 Spearman
     k = sum(p.numel() for p in model.parameters())
     aic = compute_aic(nll, k)
     
     print(f"验证集性能 ({model_name} + exemplar - Full Dataset):")
-    print(f"  Expected Accuracy: {exp_acc:.2f}")
+    print(f"  Top-1 Accuracy: {top1_acc:.2f}%")
+    print(f"  Expected Accuracy: {exp_acc:.2f}%")
     print(f"  NLL: {nll:.4f}")
     print(f"  Spearman (per-image): {spearman:.4f}")
     print(f"  AIC: {aic:.4f}")
@@ -217,6 +242,7 @@ def train_exemplar_model(model_name='resnet18', epochs=30): # 进一步减少 ep
     print(f"  总存储成本 (Exemplars + Labels): {total_storage_cost}") 
     
     return {
+        "top1_accuracy": top1_acc,
         "expected_accuracy": exp_acc,
         "nll": nll,
         "spearman": spearman,

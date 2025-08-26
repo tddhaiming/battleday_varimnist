@@ -31,8 +31,8 @@ def get_train_val_features(model_name='resnet18'):
     """获取训练和验证集的特征"""
     # 加载特征
     try:
-        features = np.load(f"/content/gdrive/MyDrive/battleday_varimnist/features/{model_name}_features.npy")
-        softlabels = np.load("/content/gdrive/MyDrive/battleday_varimnist/data/processed/softlabels.npy")
+        features = np.load(f"/mnt/dataset0/thm/code/battleday_varimnist/features/{model_name}_features.npy")
+        softlabels = np.load("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy")
         splits = load_splits()
         
         if splits is None:
