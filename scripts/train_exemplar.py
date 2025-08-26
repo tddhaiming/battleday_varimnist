@@ -19,6 +19,22 @@ import time
 # 如果你的 PyTorch 版本支持，可以设置以下环境变量来减少内存碎片
 # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
+def compute_expected_accuracy(preds, targets):
+    """
+    计算 Expected Accuracy。
+    衡量模型预测分布与人类响应分布的平均重合程度。
+    """
+    if preds.shape != targets.shape:
+        raise ValueError("preds and targets must have the same shape")
+        
+    # 计算每个样本的预测分布与真实分布的点积
+    sample_accuracies = np.sum(preds * targets, axis=1) # (N,)
+    
+    # 计算平均准确率
+    expected_accuracy = np.mean(sample_accuracies) * 100.0
+    
+    return expected_accuracy
+
 def compute_nll(preds, targets):
     """计算负对数似然"""
     preds = np.clip(preds, 1e-8, 1 - 1e-8)
@@ -183,12 +199,14 @@ def train_exemplar_model(model_name='resnet18', epochs=30): # 进一步减少 ep
     all_targets = np.vstack(all_targets)
     
     # --- 8. 计算最终指标 ---
+    exp_acc = compute_expected_accuracy(preds, targets)
     nll = compute_nll(all_preds, all_targets)
     spearman = compute_spearman_per_image(all_preds, all_targets) # 使用符合原文的 Spearman
     k = sum(p.numel() for p in model.parameters())
     aic = compute_aic(nll, k)
     
     print(f"验证集性能 ({model_name} + exemplar - Full Dataset):")
+    print(f"  Expected Accuracy: {exp_acc:.4f}")
     print(f"  NLL: {nll:.4f}")
     print(f"  Spearman (per-image): {spearman:.4f}")
     print(f"  AIC: {aic:.4f}")
@@ -199,6 +217,7 @@ def train_exemplar_model(model_name='resnet18', epochs=30): # 进一步减少 ep
     print(f"  总存储成本 (Exemplars + Labels): {total_storage_cost}") 
     
     return {
+        "expected_accuracy": exp_acc,
         "nll": nll,
         "spearman": spearman,
         "aic": aic,
