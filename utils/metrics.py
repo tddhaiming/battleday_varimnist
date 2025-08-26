@@ -3,6 +3,22 @@ import torch
 import numpy as np
 from scipy.stats import spearmanr
 
+def compute_expected_accuracy(preds, targets):
+    """
+    计算 Expected Accuracy。
+    衡量模型预测分布与人类响应分布的平均重合程度。
+    """
+    if preds.shape != targets.shape:
+        raise ValueError("preds and targets must have the same shape")
+        
+    # 计算每个样本的预测分布与真实分布的点积
+    sample_accuracies = np.sum(preds * targets, axis=1) # (N,)
+    
+    # 计算平均准确率
+    expected_accuracy = np.mean(sample_accuracies) * 100.0
+    
+    return expected_accuracy
+
 def compute_nll(preds, targets):
     """计算负对数似然"""
     preds = np.clip(preds, 1e-8, 1 - 1e-8)
@@ -57,7 +73,7 @@ def evaluate_model(model, features, softlabels, device):
     with torch.no_grad():
         X = torch.tensor(features).float().to(device)
         preds = model(X).cpu().numpy()
-    
+    exp_acc = compute_expected_accuracy(preds, targets)
     nll = compute_nll(preds, softlabels)
     spearman = compute_spearman(preds, softlabels)
     
@@ -66,6 +82,7 @@ def evaluate_model(model, features, softlabels, device):
     aic = compute_aic(nll, k)
     
     return {
+        "expected_accuracy": exp_acc,
         "nll": nll,
         "spearman": spearman,
         "aic": aic,
