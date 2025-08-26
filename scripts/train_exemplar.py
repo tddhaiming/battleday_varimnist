@@ -206,7 +206,7 @@ def train_exemplar_model(model_name='resnet18', epochs=30): # 进一步减少 ep
     aic = compute_aic(nll, k)
     
     print(f"验证集性能 ({model_name} + exemplar - Full Dataset):")
-    print(f"  Expected Accuracy: {exp_acc:.4f}")
+    print(f"  Expected Accuracy: {exp_acc:.2f}")
     print(f"  NLL: {nll:.4f}")
     print(f"  Spearman (per-image): {spearman:.4f}")
     print(f"  AIC: {aic:.4f}")
