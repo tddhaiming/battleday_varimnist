@@ -2,6 +2,28 @@
 import torch
 import numpy as np
 from scipy.stats import spearmanr
+def compute_top1_accuracy(preds, targets):
+    """
+    计算 Top-1 Accuracy (基于 argmax)。
+    衡量模型预测的最可能类别与人类最倾向类别匹配的比例。
+    """
+    if preds.shape != targets.shape:
+        raise ValueError("preds and targets must have the same shape")
+
+    # 获取模型预测的类别 (每个样本预测概率最高的类别)
+    predicted_classes = np.argmax(preds, axis=1)  # (N,)
+    
+    # 获取人类最倾向的类别 (每个样本人类响应概率最高的类别)
+    true_classes = np.argmax(targets, axis=1)     # (N,)
+    
+    # 计算预测正确的样本数
+    correct_predictions = np.sum(predicted_classes == true_classes)
+    
+    # 计算准确率
+    total_samples = preds.shape[0]
+    accuracy = (correct_predictions / total_samples) * 100.0
+    
+    return accuracy
 
 def compute_expected_accuracy(preds, targets):
     """
@@ -73,9 +95,10 @@ def evaluate_model(model, features, softlabels, device):
     with torch.no_grad():
         X = torch.tensor(features).float().to(device)
         preds = model(X).cpu().numpy()
-    exp_acc = compute_expected_accuracy(preds, targets)
+    top1_acc = compute_top1_accuracy(preds, softlabels)
+    exp_acc = compute_expected_accuracy(preds, softlabels)
     nll = compute_nll(preds, softlabels)
-    spearman = compute_spearman(preds, softlabels)
+    spearman = compute_spearman_per_image(preds, softlabels)
     
     # 计算参数数量
     k = sum(p.numel() for p in model.parameters())
