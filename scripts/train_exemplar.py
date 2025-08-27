@@ -1,7 +1,7 @@
 # scripts/train_exemplar.py
 import sys
 import os
-
+import json
 # 将项目根目录添加到 Python 路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -232,7 +232,7 @@ def train_exemplar_model(model_name='resnet18', epochs=80):
     total_storage_cost = X_train_exemplars.shape[0] * X_train_exemplars.shape[1] + train_labels_exemplars.shape[0]
     print(f"  总存储成本 (Exemplars + Labels): {total_storage_cost}") 
     
-    return {
+    result_dict = {
         "top1_accuracy": top1_acc,
         "expected_accuracy": exp_acc,
         "nll": nll,
@@ -242,6 +242,30 @@ def train_exemplar_model(model_name='resnet18', epochs=80):
         "total_storage": total_storage_cost,
         "num_exemplars": X_train_exemplars.shape[0]
     }
+
+
+     # --- 9. 保存结果到 JSON 文件 ---
+    results_file = "/mnt/dataset0/thm/code/battleday_varimnist/results/model_comparison_results.json"
+    os.makedirs(os.path.dirname(results_file), exist_ok=True)
+
+    # 读取现有结果（如果存在）
+    if os.path.exists(results_file):
+        with open(results_file, 'r') as f:
+            all_results = json.load(f)
+    else:
+        # 初始化结果结构（与 visualize_results.py 一致）
+        all_results = {"prototype": {}, "exemplar": {}}
+
+    # 更新 exmeplar 部分的结果（使用模型名+训练方式作为键，如 'resnet18_full'）
+    result_key = f"{model_name}_full"  # 区分不同模型和训练配置
+    all_results["exemplar"][result_key] = result_dict
+
+    # 写入文件
+    with open(results_file, 'w') as f:
+        json.dump(all_results, indent=2, fp=f)
+    print(f"评估结果已保存到: {results_file}")
+
+    return result_dict
 
 if __name__ == "__main__":
     train_exemplar_model('resnet18')
