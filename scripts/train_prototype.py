@@ -56,6 +56,8 @@ def train_prototype_model(model_name='resnet18', mode="classic", epochs=100):
     # 评估模型
     metrics = evaluate_model(model, X_val, y_val, device)
     print(f"验证集性能 ({model_name} + {mode}):")
+    print(f"  Top-1 Accuracy: {metrics['top1_acc']:.2f}%")
+    print(f"  Expected Accuracy: {metrics['exp_acc']:.2f}%")
     print(f"  NLL: {metrics['nll']:.4f}")
     print(f"  Spearman: {metrics['spearman']:.4f}")
     print(f"  AIC: {metrics['aic']:.4f}")
