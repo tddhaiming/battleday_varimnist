@@ -107,11 +107,45 @@ def train_exemplar_model(model_name='resnet18', epochs=80):
     print(f"使用设备: {device}")
     
     # --- 1. 加载特征 ---
-    X_train, y_train, X_val, y_val = get_train_val_features(model_name)
-    if X_train is None:
-        print("请先运行特征提取脚本!")
-        return
+    # X_train, y_train, X_val, y_val = get_train_val_features(model_name)
+    # if X_train is None:
+    #     print("请先运行特征提取脚本!")
+    #     return
     
+    # original_train_size = X_train.shape[0]
+    # feature_dim = X_train.shape[1]
+    # print(f"特征维度: {feature_dim}")
+    # print(f"原始训练样本数: {original_train_size}")
+    # print(f"验证样本数: {X_val.shape[0]}")
+    try:
+        # 特征文件路径
+        features_path = f"/mnt/dataset0/thm/code/battleday_varimnist/features/{model_name}_features.npy"
+        # 软标签路径
+        softlabels_path = "/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy"
+        # 数据划分路径
+        splits_path = "/mnt/dataset0/thm/code/battleday_varimnist/data/splits.json"
+        
+        # 加载数据
+        features = np.load(features_path)
+        softlabels = np.load(softlabels_path)
+        
+        with open(splits_path, "r") as f:
+            splits = json.load(f)
+        
+        # 划分训练集和验证集
+        train_idx = splits["train"]
+        val_idx = splits["val"]
+        
+        X_train = features[train_idx]
+        y_train = softlabels[train_idx]
+        X_val = features[val_idx]
+        y_val = softlabels[val_idx]
+        
+    except Exception as e:
+        print(f"加载特征时出错: {e}")
+        print("请先运行数据预处理脚本和特征提取脚本!")
+        return
+
     original_train_size = X_train.shape[0]
     feature_dim = X_train.shape[1]
     print(f"特征维度: {feature_dim}")
