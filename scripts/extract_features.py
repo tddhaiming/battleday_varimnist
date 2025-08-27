@@ -47,8 +47,8 @@ def extract_features_with_pretrained(model_name='resnet18'):
     
     # 加载 variMNIST 数据
     try:
-        images = np.load("/content/gdrive/MyDrive/battleday_varimnist/data/processed/images.npy")
-        softlabels = np.load("/content/gdrive/MyDrive/battleday_varimnist/data/processed/softlabels.npy")
+        images = np.load("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/images.npy")
+        softlabels = np.load("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy")
     except:
         print("请先运行数据预处理脚本!")
         return
@@ -77,9 +77,9 @@ def extract_features_with_pretrained(model_name='resnet18'):
     features = np.vstack(features)
     
     # 保存特征
-    os.makedirs("/content/gdrive/MyDrive/battleday_varimnist/features", exist_ok=True)
-    np.save(f"/content/gdrive/MyDrive/battleday_varimnist/features/{model_name}_features.npy", features)
-    np.save("/content/gdrive/MyDrive/battleday_varimnist/data/processed/softlabels.npy", softlabels)  # 确保标签也被保存
+    os.makedirs("/mnt/dataset0/thm/code/battleday_varimnist/features", exist_ok=True)
+    np.save(f"/mnt/dataset0/thm/code/battleday_varimnist/features/{model_name}_features.npy", features)
+    np.save("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy", softlabels)  # 确保标签也被保存
     
     print(f"特征提取完成!")
     print(f"特征形状: {features.shape}")
