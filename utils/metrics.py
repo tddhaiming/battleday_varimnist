@@ -105,6 +105,7 @@ def evaluate_model(model, features, softlabels, device):
     aic = compute_aic(nll, k)
     
     return {
+        "top1_accuracy": top1_acc,
         "expected_accuracy": exp_acc,
         "nll": nll,
         "spearman": spearman,
