@@ -1,89 +1,3 @@
-# # scripts/train_prototype.py
-# import torch
-# import torch.nn as nn
-# import numpy as np
-# import os
-# import sys
-
-# # 将项目根目录添加到 Python 路径
-# project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# if project_root not in sys.path:
-#     sys.path.append(project_root)
-
-# from models.prototype import PrototypeModel
-# from utils.data_utils import get_train_val_features
-# from utils.metrics import evaluate_model
-
-# def train_prototype_model(model_name='resnet18', mode="classic", epochs=100):
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#     print(f"使用设备: {device}")
-    
-#     # 加载特征
-#     X_train, y_train, X_val, y_val = get_train_val_features(model_name)
-#     if X_train is None:
-#         print("请先运行特征提取脚本!")
-#         return
-    
-#     feature_dim = X_train.shape[1]
-#     print(f"特征维度: {feature_dim}")
-    
-#     # 转换为 PyTorch 张量
-#     X_train = torch.tensor(X_train).float().to(device)
-#     y_train = torch.tensor(y_train).float().to(device)
-    
-#     # 初始化模型
-#     model = PrototypeModel(mode=mode, feature_dim=feature_dim).to(device)
-#     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
-#     criterion = nn.KLDivLoss(reduction="batchmean")
-    
-#     # 训练
-#     model.train()
-#     for epoch in range(epochs):
-#         optimizer.zero_grad()
-#         preds = model(X_train)
-#         loss = criterion(torch.log(preds + 1e-8), y_train)
-#         loss.backward()
-#         optimizer.step()
-        
-#         if epoch % 20 == 0:
-#             print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
-    
-#     # 保存模型
-#     os.makedirs("/content/gdrive/MyDrive/battleday_varimnist/results", exist_ok=True)
-#     torch.save(model.state_dict(), f"/content/gdrive/MyDrive/battleday_varimnist/results/prototype_{mode}_{model_name}.pth")
-#     print(f"原型模型 ({mode}) 训练完成并保存")
-    
-#     # 评估模型
-#     metrics = evaluate_model(model, X_val, y_val, device)
-#     print(f"验证集性能 ({model_name} + {mode}):")
-#     print(f"  Top-1 Accuracy: {metrics['top1_acc']:.2f}%")
-#     print(f"  Expected Accuracy: {metrics['exp_acc']:.2f}%")
-#     print(f"  NLL: {metrics['nll']:.4f}")
-#     print(f"  Spearman: {metrics['spearman']:.4f}")
-#     print(f"  AIC: {metrics['aic']:.4f}")
-#     print(f"  参数数量: {metrics['params']}")
-    
-#     return metrics
-
-# def compare_all_prototype_models(model_name='resnet18'):
-#     """比较所有原型模型"""
-#     results = {}
-#     modes = ['classic', 'linear', 'quadratic']
-    
-#     for mode in modes:
-#         print(f"\n=== 训练原型模型 ({mode}) ===")
-#         metrics = train_prototype_model(model_name, mode)
-#         results[mode] = metrics
-    
-#     # 打印比较结果
-#     print(f"\n=== {model_name} 原型模型比较结果 ===")
-#     print("模式\t\tNLL\t\tSpearman\tAIC")
-#     print("-" * 50)
-#     for mode, metrics in results.items():
-#         print(f"{mode}\t\t{metrics['nll']:.4f}\t\t{metrics['spearman']:.4f}\t\t{metrics['aic']:.4f}")
-
-# if __name__ == "__main__":
-#     compare_all_prototype_models('resnet18')
 """
 Training script for Prototype models (Classic / Linear / Quadratic).
 Supports:
@@ -98,16 +12,28 @@ Example:
 """
 
 import os
+import sys
 import time
 import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, random_split
-from torch.cuda.amp import autocast, GradScaler
+try:
+    from torch.amp import autocast, GradScaler
+    USE_NEW_AMP = True
+except ImportError:
+    from torch.cuda.amp import autocast, GradScaler
+    USE_NEW_AMP = False
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn.functional as F
 import json
+
+# 添加项目根目录到 Python 路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+    print(f"已将项目根目录添加到路径: {project_root}")
 
 from models.prototype import ClassicPrototype, LinearPrototype, QuadraticPrototype
 from utils.metrics import accuracy, topk_accuracy, nll_loss, aic_from_nll
@@ -149,14 +75,30 @@ def save_results_to_json(args, final_metrics, best_val, epoch):
         json.dump(results, f, indent=2)
     
     print(f"Results saved to {filepath}")
+
+def convert_to_class_indices(labels):
+    """将 one-hot 编码转换为类别索引，用于评估指标计算"""
+    if labels.dim() == 2 and labels.shape[1] > 1:
+        return torch.argmax(labels, dim=1)
+    return labels
+
+def kl_div_loss_with_onehot(logits, targets_onehot):
+    """使用 KL 散度损失处理 one-hot 编码标签"""
+    log_probs = F.log_softmax(logits, dim=1)
+    # 对 one-hot 标签使用 KL 散度
+    return F.kl_div(log_probs, targets_onehot, reduction='batchmean')
 # === 新代码结束 ===
 
 
 def train(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     features = torch.load(args.features)  # (N,D)
-    labels = torch.load(args.labels)      # (N,)
+    labels = torch.load(args.labels)      # (N,) 或 (N, C)
     prototypes = torch.load(args.prototypes)  # (C, D)
+
+    print(f"特征形状: {features.shape}")
+    print(f"标签形状: {labels.shape}")
+    print(f"标签维度: {labels.dim()}")
 
     D = features.shape[1]
     C = prototypes.shape[0]
@@ -193,11 +135,18 @@ def train(args):
         raise ValueError("Unknown model type")
 
     # Option: let gamma be learnable
-    gamma_raw = nn.Parameter(torch.tensor(1.0).log(), requires_grad=True)
-    gamma_raw = gamma_raw.to(device)
-    # include gamma in optimizer
+    # 修复：创建 gamma_raw 参数并确保它是叶子张量
+    gamma_raw = nn.Parameter(torch.tensor(1.0).log())  # 创建时就在 CPU 上
+    # include gamma in optimizer - 在移动到设备之前添加到优化器
     optimizer = optim.Adam(trainable_params + [gamma_raw], lr=args.lr)
-    scaler = GradScaler()
+    # 然后将 gamma_raw 移动到设备
+    gamma_raw = gamma_raw.to(device)
+    
+    # 处理不同版本的 AMP API
+    if USE_NEW_AMP:
+        scaler = GradScaler()
+    else:
+        scaler = GradScaler()
     writer = SummaryWriter(log_dir=args.logdir)
 
     start_epoch = 0
@@ -210,7 +159,10 @@ def train(args):
         model.load_state_dict(ck["model_state"])
         optimizer.load_state_dict(ck["optimizer_state"])
         scaler.load_state_dict(ck["scaler_state"])
-        gamma_raw.data = ck.get("gamma_raw", gamma_raw.data)
+        # 修复：从检查点恢复 gamma_raw
+        if "gamma_raw" in ck:
+            # 创建新的参数并设置值
+            gamma_raw.data = ck["gamma_raw"].to(device)
         start_epoch = ck["epoch"] + 1
         print(f"Resumed from epoch {start_epoch}")
 
@@ -221,10 +173,19 @@ def train(args):
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            with autocast():
-                gamma = torch.exp(gamma_raw)
-                logits = model(x, gamma=gamma)
-                loss = F.nll_loss(F.log_softmax(logits, dim=1), y)
+            # 处理不同版本的 autocast API
+            if USE_NEW_AMP:
+                with autocast():
+                    gamma = torch.exp(gamma_raw)
+                    logits = model(x, gamma=gamma)
+                    # 使用 KL 散度损失处理 one-hot 标签
+                    loss = kl_div_loss_with_onehot(logits, y)
+            else:
+                with autocast():
+                    gamma = torch.exp(gamma_raw)
+                    logits = model(x, gamma=gamma)
+                    # 使用 KL 散度损失处理 one-hot 标签
+                    loss = kl_div_loss_with_onehot(logits, y)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -241,21 +202,30 @@ def train(args):
         with torch.no_grad():
             for x, y in val_loader:
                 x, y = x.to(device), y.to(device)
-                with autocast():
-                    gamma = torch.exp(gamma_raw)
-                    logits = model(x, gamma=gamma)
-                    loss = F.nll_loss(F.log_softmax(logits, dim=1), y, reduction='sum')
-                    val_loss += loss.item()
-                    all_logits.append(logits)
-                    all_labels.append(y)
+                # 处理不同版本的 autocast API
+                if USE_NEW_AMP:
+                    with autocast():
+                        gamma = torch.exp(gamma_raw)
+                        logits = model(x, gamma=gamma)
+                        loss = kl_div_loss_with_onehot(logits, y)
+                else:
+                    with autocast():
+                        gamma = torch.exp(gamma_raw)
+                        logits = model(x, gamma=gamma)
+                        loss = kl_div_loss_with_onehot(logits, y)
+                val_loss += loss.item() * x.size(0)
+                all_logits.append(logits)
+                all_labels.append(y)
             
             val_loss = val_loss / len(val_dataset)
             all_logits = torch.cat(all_logits, dim=0)
             all_labels = torch.cat(all_labels, dim=0)
             
-            val_nll = F.nll_loss(F.log_softmax(all_logits, dim=1), all_labels, reduction='mean').item()
-            val_acc = accuracy(all_logits, all_labels)
-            val_top5 = topk_accuracy(all_logits, all_labels, k=5)
+            # 转换为类别索引用于评估指标
+            labels_for_metrics = convert_to_class_indices(all_labels)
+            val_nll = F.nll_loss(F.log_softmax(all_logits, dim=1), labels_for_metrics, reduction='mean').item()
+            val_acc = accuracy(all_logits, labels_for_metrics)
+            val_top5 = topk_accuracy(all_logits, labels_for_metrics, k=5)
 
         print(f"[Epoch {epoch}] train_loss={epoch_loss:.4f} val_nll={val_nll:.4f} val_acc={val_acc:.4f} time={elapsed:.1f}s")
 
@@ -272,7 +242,7 @@ def train(args):
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "scaler_state": scaler.state_dict(),
-            "gamma_raw": gamma_raw.data
+            "gamma_raw": gamma_raw.data.cpu()  # 保存时移动到 CPU
         }
         save_checkpoint(state, args.checkpoint)
 
@@ -300,15 +270,15 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="linear", choices=["classic", "linear", "quadratic"])
-    parser.add_argument("--features", type=str, default="data/features.pt")
-    parser.add_argument("--labels", type=str, default="data/labels.pt")
-    parser.add_argument("--prototypes", type=str, default="data/prototypes.pt")
+    parser.add_argument("--features", type=str, default="/mnt/dataset0/thm/code/battleday_varimnist/data/features.pt")
+    parser.add_argument("--labels", type=str, default="/mnt/dataset0/thm/code/battleday_varimnist/data/labels.pt")
+    parser.add_argument("--prototypes", type=str, default="/mnt/dataset0/thm/code/battleday_varimnist/data/prototypes.pt")
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--logdir", type=str, default="./runs/prototype")
-    parser.add_argument("--checkpoint", type=str, default="checkpoint_prototype.pth")
+    parser.add_argument("--logdir", type=str, default="/mnt/dataset0/thm/code/battleday_varimnist/runs/prototype")
+    parser.add_argument("--checkpoint", type=str, default="/mnt/dataset0/thm/code/battleday_varimnist/checkpoint_prototype.pth")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--early_stop_delta", type=float, default=1e-4)
