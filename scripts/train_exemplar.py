@@ -1,342 +1,632 @@
-# scripts/train_exemplar.py
-import sys
-import os
-import json
-# 将项目根目录添加到 Python 路径
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.append(project_root)
+# # scripts/train_exemplar.py
+# import sys
+# import os
+# import json
+# # 将项目根目录添加到 Python 路径
+# project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# if project_root not in sys.path:
+#     sys.path.append(project_root)
 
+# import torch
+# import torch.nn as nn
+# import numpy as np
+# import os
+# from models.exemplar import ExemplarModel
+# from utils.data_utils import get_train_val_features
+# from utils.metrics import (
+#     compute_top1_accuracy,
+#     compute_expected_accuracy,
+#     compute_nll,
+#     compute_spearman_per_image,
+#     compute_aic
+# )
+# import time
+
+# # --- 内存管理设置 ---
+# # 如果你的 PyTorch 版本支持，可以设置以下环境变量来减少内存碎片
+# # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+# # def compute_top1_accuracy(preds, targets):
+# #     """
+# #     计算 Top-1 Accuracy (基于 argmax)。
+# #     衡量模型预测的最可能类别与人类最倾向类别匹配的比例。
+# #     """
+# #     if preds.shape != targets.shape:
+# #         raise ValueError("preds and targets must have the same shape")
+
+# #     # 获取模型预测的类别 (每个样本预测概率最高的类别)
+# #     predicted_classes = np.argmax(preds, axis=1)  # (N,)
+    
+# #     # 获取人类最倾向的类别 (每个样本人类响应概率最高的类别)
+# #     true_classes = np.argmax(targets, axis=1)     # (N,)
+    
+# #     # 计算预测正确的样本数
+# #     correct_predictions = np.sum(predicted_classes == true_classes)
+    
+# #     # 计算准确率
+# #     total_samples = preds.shape[0]
+# #     accuracy = (correct_predictions / total_samples) * 100.0
+    
+# #     return accuracy
+
+# # def compute_expected_accuracy(preds, targets):
+# #     """
+# #     计算 Expected Accuracy。
+# #     衡量模型预测分布与人类响应分布的平均重合程度。
+# #     """
+# #     if preds.shape != targets.shape:
+# #         raise ValueError("preds and targets must have the same shape")
+        
+# #     # 计算每个样本的预测分布与真实分布的点积
+# #     sample_accuracies = np.sum(preds * targets, axis=1) # (N,)
+    
+# #     # 计算平均准确率
+# #     expected_accuracy = np.mean(sample_accuracies) * 100.0
+    
+# #     return expected_accuracy
+
+# # def compute_nll(preds, targets):
+# #     """计算负对数似然"""
+# #     preds = np.clip(preds, 1e-8, 1 - 1e-8)
+# #     return -np.mean(np.sum(targets * np.log(preds), axis=1))
+
+# # def compute_spearman_per_image(preds, targets):
+# #     """计算每张图像的 Spearman 相关系数 (符合 Battleday 原文定义)"""
+# #     from scipy.stats import spearmanr
+# #     if preds.shape != targets.shape:
+# #         raise ValueError("preds and targets must have the same shape")
+    
+# #     n_samples = preds.shape[0]
+# #     spearman_coeffs = []
+    
+# #     for i in range(n_samples):
+# #         pred_dist = preds[i]
+# #         target_dist = targets[i]
+        
+# #         if len(np.unique(pred_dist)) > 1 and len(np.unique(target_dist)) > 1:
+# #             try:
+# #                 corr, _ = spearmanr(pred_dist, target_dist)
+# #                 if np.isfinite(corr):
+# #                     spearman_coeffs.append(corr)
+# #             except Exception:
+# #                 pass
+    
+# #     if spearman_coeffs:
+# #         return np.mean(spearman_coeffs)
+# #     else:
+# #         return 0.0
+
+# # def compute_aic(nll, k):
+# #     """计算 AIC"""
+# #     return 2 * k - 2 * (-nll)
+
+# def train_exemplar_model(model_name='resnet18', epochs=80):
+#     """
+#     训练 Exemplar 模型，使用所有可用的训练样本，并采用内存优化策略。
+#     """
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     print(f"使用设备: {device}")
+    
+#     # --- 1. 加载特征 ---
+#     # X_train, y_train, X_val, y_val = get_train_val_features(model_name)
+#     # if X_train is None:
+#     #     print("请先运行特征提取脚本!")
+#     #     return
+    
+#     # original_train_size = X_train.shape[0]
+#     # feature_dim = X_train.shape[1]
+#     # print(f"特征维度: {feature_dim}")
+#     # print(f"原始训练样本数: {original_train_size}")
+#     # print(f"验证样本数: {X_val.shape[0]}")
+#     try:
+#         # 特征文件路径
+#         features_path = f"/mnt/dataset0/thm/code/battleday_varimnist/features/{model_name}_features.npy"
+#         # 软标签路径
+#         softlabels_path = "/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy"
+#         # 数据划分路径
+#         splits_path = "/mnt/dataset0/thm/code/battleday_varimnist/data/splits.json"
+        
+#         # 加载数据
+#         features = np.load(features_path)
+#         softlabels = np.load(softlabels_path)
+        
+#         with open(splits_path, "r") as f:
+#             splits = json.load(f)
+        
+#         # 划分训练集和验证集
+#         train_idx = splits["train"]
+#         val_idx = splits["val"]
+        
+#         X_train = features[train_idx]
+#         y_train = softlabels[train_idx]
+#         X_val = features[val_idx]
+#         y_val = softlabels[val_idx]
+        
+#     except Exception as e:
+#         print(f"加载特征时出错: {e}")
+#         print("请先运行数据预处理脚本和特征提取脚本!")
+#         return
+
+#     original_train_size = X_train.shape[0]
+#     feature_dim = X_train.shape[1]
+#     print(f"特征维度: {feature_dim}")
+#     print(f"原始训练样本数: {original_train_size}")
+#     print(f"验证样本数: {X_val.shape[0]}")
+
+#     # --- 2. 准备 Exemplar 集合 (使用所有样本) ---
+#     X_train_exemplars = X_train
+#     y_train_exemplars = y_train
+#     train_labels_exemplars = np.argmax(y_train_exemplars, axis=1)
+    
+#     print(f"使用全部 {X_train_exemplars.shape[0]} 个样本作为 Exemplars")
+
+#     # --- 3. 初始化模型 ---
+#     model = ExemplarModel(
+#         exemplars=X_train_exemplars,
+#         labels=train_labels_exemplars,
+#         feature_dim=feature_dim
+#     ).to(device)
+    
+#     # 只优化模型的可学习参数
+#     optimizer = torch.optim.Adam([model.beta, model.gamma, model.Sigma_inv], lr=1e-2)
+#     criterion = nn.KLDivLoss(reduction="batchmean")
+    
+#     # --- 4. 内存优化设置 ---
+#     train_batch_size = 16
+#     eval_batch_size = 32
+#     print(f"训练批处理大小: {train_batch_size}")
+#     print(f"评估批处理大小: {eval_batch_size}")
+    
+#     # --- 5. 训练循环 ---
+#     model.train()
+#     print("开始训练...")
+#     checkpoint_dir = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/"
+#     os.makedirs(checkpoint_dir, exist_ok=True)
+#     checkpoint_path = os.path.join(checkpoint_dir, "epoch2_checkpoint.pth")  # 第二个epoch的保存路径
+#     force_save_path = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/epoch1_force_save.pth"
+# # 检查是否有第一个epoch的参数残留（即使从第2个epoch开始，内存可能还保留）
+#     try:
+#         torch.save({
+#             "model_state_dict": model.state_dict(),  # 内存中的模型参数（可能是第一个epoch的）
+#             "completed_epochs": 1,  
+#             "note": "重启后强制保存，即使从第2个epoch开始"
+#         }, force_save_path)
+#         print(f"\n✅ 已强制保存第一个epoch的参数到：{force_save_path}")
+#     except Exception as e:
+#         print(f"强制保存第一个epoch参数失败：{e}，没关系，继续训练第2个epoch")
+#     for epoch in range(epochs):
+#         current_epoch = epoch + 1  # 显示用（1-based）
+#         epoch_loss = 0
+#         num_batches = 0
+#         start_time = time.time()
+        
+#         # 分批处理训练数据
+#         for i in range(0, len(X_train_exemplars), train_batch_size):
+#             X_batch = X_train_exemplars[i:i+train_batch_size]
+#             y_batch = y_train_exemplars[i:i+train_batch_size]
+            
+#             X_batch_tensor = torch.tensor(X_batch).float().to(device)
+#             y_batch_tensor = torch.tensor(y_batch).float().to(device)
+            
+#             optimizer.zero_grad()
+#             preds = model(X_batch_tensor)
+#             loss = criterion(torch.log(preds + 1e-8), y_batch_tensor)
+#             loss.backward()
+#             optimizer.step()
+            
+#             epoch_loss += loss.item()
+#             num_batches += 1
+        
+#         epoch_time = time.time() - start_time
+#         if epoch % 5 == 0 or epoch == epochs - 1:
+#             avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
+#             print(f"Epoch {epoch+1}/{epochs}, Average Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
+
+#         if epoch==0:  # 当完成第2个epoch时触发保存
+#             backup_checkpoint_path = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/backup_epoch1.pth"
+#             torch.save({
+#                 "model_state_dict": model.state_dict(),       # 模型参数
+#                 "optimizer_state_dict": optimizer.state_dict(), # 优化器状态
+#                 "completed_epochs": current_epoch,            # 已完成2个epoch
+#                 "loss": avg_loss,                             # 第2个epoch的损失
+#                 "time": epoch_time                            # 第2个epoch的耗时
+#             }, backup_checkpoint_path)
+#             print(f"\n===== 已自动保存第二个epoch的成果到: {backup_checkpoint_path} =====")
+
+#         if current_epoch == 2:  # 当完成第2个epoch时触发保存
+#             torch.save({
+#                 "model_state_dict": model.state_dict(),       # 模型参数
+#                 "optimizer_state_dict": optimizer.state_dict(), # 优化器状态
+#                 "completed_epochs": current_epoch,            # 已完成2个epoch
+#                 "loss": avg_loss,                             # 第2个epoch的损失
+#                 "time": epoch_time                            # 第2个epoch的耗时
+#             }, checkpoint_path)
+#             print(f"\n===== 已自动保存第二个epoch的成果到: {checkpoint_path} =====")
+#             print(f"===== 可按Ctrl+C停止训练，开始优化代码，后续从该checkpoint续训 =====")
+
+#     print("训练完成!")
+
+#     # --- 6. 保存模型 ---
+#     result_dir = "/mnt/dataset0/thm/code/battleday_varimnist/results"
+#     os.makedirs(result_dir, exist_ok=True)
+#     model_save_path = f"{result_dir}/exemplar_{model_name}_full.pth"
+    
+#     torch.save({
+#         'model_state_dict': model.state_dict(),
+#         'exemplar_count': len(X_train_exemplars),
+#         'feature_dim': feature_dim,
+#         'beta': model.beta.item(),
+#         'gamma': model.gamma.item(),
+#         'Sigma_inv': model.Sigma_inv.detach().cpu().numpy()
+#     }, model_save_path)
+#     print(f"模型元数据已保存到: {model_save_path}")
+
+#     # --- 7. 评估模型 ---
+#     print("开始评估模型...")
+#     model.eval()
+#     all_preds = []
+#     all_targets = []
+    
+#     # 释放缓存
+#     if torch.cuda.is_available():
+#         torch.cuda.empty_cache()
+
+#     with torch.no_grad():
+#         # 分批处理验证数据
+#         for i in range(0, len(X_val), eval_batch_size):
+#             X_val_batch = X_val[i:i+eval_batch_size]
+#             y_val_batch = y_val[i:i+eval_batch_size]
+            
+#             X_val_tensor = torch.tensor(X_val_batch).float().to(device)
+#             preds_batch = model(X_val_tensor)
+            
+#             all_preds.append(preds_batch.cpu().numpy())
+#             all_targets.append(y_val_batch)
+    
+#     preds = np.vstack(all_preds)
+#     targets = np.vstack(all_targets)
+    
+#     # --- 8. 计算最终指标（使用 metrics 中的函数）---
+#     top1_acc = compute_top1_accuracy(preds, targets)
+#     exp_acc = compute_expected_accuracy(preds, targets)  # 来自 metrics
+#     nll = compute_nll(preds, targets)  # 来自 metrics
+#     spearman = compute_spearman_per_image(preds, targets)  # 来自 metrics
+#     k = sum(p.numel() for p in model.parameters())
+#     aic = compute_aic(nll, k)  # 来自 metrics
+    
+#     print(f"验证集性能 ({model_name} + exemplar - Full Dataset):")
+#     print(f"  Top-1 Accuracy: {top1_acc:.2f}%")
+#     print(f"  Expected Accuracy: {exp_acc:.2f}%")
+#     print(f"  NLL: {nll:.4f}")
+#     print(f"  Spearman (per-image): {spearman:.4f}")
+#     print(f"  AIC: {aic:.4f}")
+#     print(f"  可学习参数数量: {k}")
+#     total_storage_cost = X_train_exemplars.shape[0] * X_train_exemplars.shape[1] + train_labels_exemplars.shape[0]
+#     print(f"  总存储成本 (Exemplars + Labels): {total_storage_cost}") 
+    
+#     result_dict = {
+#         "top1_accuracy": top1_acc,
+#         "expected_accuracy": exp_acc,
+#         "nll": nll,
+#         "spearman": spearman,
+#         "aic": aic,
+#         "trainable_params": k,
+#         "total_storage": total_storage_cost,
+#         "num_exemplars": X_train_exemplars.shape[0]
+#     }
+
+
+#      # --- 9. 保存结果到 JSON 文件 ---
+#     results_file = "/mnt/dataset0/thm/code/battleday_varimnist/results/model_comparison_results.json"
+#     os.makedirs(os.path.dirname(results_file), exist_ok=True)
+
+#     # 读取现有结果（如果存在）
+#     if os.path.exists(results_file):
+#         with open(results_file, 'r') as f:
+#             all_results = json.load(f)
+#     else:
+#         # 初始化结果结构（与 visualize_results.py 一致）
+#         all_results = {"prototype": {}, "exemplar": {}}
+
+#     # 更新 exmeplar 部分的结果（使用模型名+训练方式作为键，如 'resnet18_full'）
+#     result_key = f"{model_name}_full"  # 区分不同模型和训练配置
+#     all_results["exemplar"][result_key] = result_dict
+
+#     # 写入文件
+#     with open(results_file, 'w') as f:
+#         json.dump(all_results, indent=2, fp=f)
+#     print(f"评估结果已保存到: {results_file}")
+
+#     return result_dict
+
+# if __name__ == "__main__":
+#     train_exemplar_model('resnet18')
+"""
+Training script for Exemplar models.
+Supports:
+- ExemplarNoAttention / ExemplarAttention
+- AMP (mixed precision)
+- Resume / checkpointing
+- TensorBoard logging
+- Early stopping
+- Block-based logits computation to handle very large exemplar sets
+
+Usage example:
+    python scripts/train_exemplar.py --model attention --exemplar_features data/exemplars_features.pt --exemplar_labels data/exemplars_labels.pt --features data/features.pt --labels data/labels.pt
+"""
+
+import os
+import time
+import argparse
 import torch
 import torch.nn as nn
-import numpy as np
-import os
-from models.exemplar import ExemplarModel
-from utils.data_utils import get_train_val_features
-from utils.metrics import (
-    compute_top1_accuracy,
-    compute_expected_accuracy,
-    compute_nll,
-    compute_spearman_per_image,
-    compute_aic
-)
-import time
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.cuda.amp import autocast, GradScaler
+from torch.utils.tensorboard import SummaryWriter
+import json
 
-# --- 内存管理设置 ---
-# 如果你的 PyTorch 版本支持，可以设置以下环境变量来减少内存碎片
-# os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-# def compute_top1_accuracy(preds, targets):
-#     """
-#     计算 Top-1 Accuracy (基于 argmax)。
-#     衡量模型预测的最可能类别与人类最倾向类别匹配的比例。
-#     """
-#     if preds.shape != targets.shape:
-#         raise ValueError("preds and targets must have the same shape")
+from models.exemplar import ExemplarNoAttention, ExemplarAttention
+from utils.metrics import accuracy, topk_accuracy, nll_loss
 
-#     # 获取模型预测的类别 (每个样本预测概率最高的类别)
-#     predicted_classes = np.argmax(preds, axis=1)  # (N,)
-    
-#     # 获取人类最倾向的类别 (每个样本人类响应概率最高的类别)
-#     true_classes = np.argmax(targets, axis=1)     # (N,)
-    
-#     # 计算预测正确的样本数
-#     correct_predictions = np.sum(predicted_classes == true_classes)
-    
-#     # 计算准确率
-#     total_samples = preds.shape[0]
-#     accuracy = (correct_predictions / total_samples) * 100.0
-    
-#     return accuracy
-
-# def compute_expected_accuracy(preds, targets):
-#     """
-#     计算 Expected Accuracy。
-#     衡量模型预测分布与人类响应分布的平均重合程度。
-#     """
-#     if preds.shape != targets.shape:
-#         raise ValueError("preds and targets must have the same shape")
-        
-#     # 计算每个样本的预测分布与真实分布的点积
-#     sample_accuracies = np.sum(preds * targets, axis=1) # (N,)
-    
-#     # 计算平均准确率
-#     expected_accuracy = np.mean(sample_accuracies) * 100.0
-    
-#     return expected_accuracy
-
-# def compute_nll(preds, targets):
-#     """计算负对数似然"""
-#     preds = np.clip(preds, 1e-8, 1 - 1e-8)
-#     return -np.mean(np.sum(targets * np.log(preds), axis=1))
-
-# def compute_spearman_per_image(preds, targets):
-#     """计算每张图像的 Spearman 相关系数 (符合 Battleday 原文定义)"""
-#     from scipy.stats import spearmanr
-#     if preds.shape != targets.shape:
-#         raise ValueError("preds and targets must have the same shape")
-    
-#     n_samples = preds.shape[0]
-#     spearman_coeffs = []
-    
-#     for i in range(n_samples):
-#         pred_dist = preds[i]
-#         target_dist = targets[i]
-        
-#         if len(np.unique(pred_dist)) > 1 and len(np.unique(target_dist)) > 1:
-#             try:
-#                 corr, _ = spearmanr(pred_dist, target_dist)
-#                 if np.isfinite(corr):
-#                     spearman_coeffs.append(corr)
-#             except Exception:
-#                 pass
-    
-#     if spearman_coeffs:
-#         return np.mean(spearman_coeffs)
-#     else:
-#         return 0.0
-
-# def compute_aic(nll, k):
-#     """计算 AIC"""
-#     return 2 * k - 2 * (-nll)
-
-def train_exemplar_model(model_name='resnet18', epochs=80):
+# === 新代码开始 ===
+def logits_exemplar_in_blocks(model, x, gamma=1.0, block_size=8000):
     """
-    训练 Exemplar 模型，使用所有可用的训练样本，并采用内存优化策略。
+    Compute logits = γ * log S(y,C) where S is sum over exemplars exp(-β * d),
+    but process exemplars in blocks to limit memory.
+
+    model: Exemplar model instance (used for beta() and w() if exists)
+    x: (B, D) on device
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"使用设备: {device}")
-    
-    # --- 1. 加载特征 ---
-    # X_train, y_train, X_val, y_val = get_train_val_features(model_name)
-    # if X_train is None:
-    #     print("请先运行特征提取脚本!")
-    #     return
-    
-    # original_train_size = X_train.shape[0]
-    # feature_dim = X_train.shape[1]
-    # print(f"特征维度: {feature_dim}")
-    # print(f"原始训练样本数: {original_train_size}")
-    # print(f"验证样本数: {X_val.shape[0]}")
-    try:
-        # 特征文件路径
-        features_path = f"/mnt/dataset0/thm/code/battleday_varimnist/features/{model_name}_features.npy"
-        # 软标签路径
-        softlabels_path = "/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy"
-        # 数据划分路径
-        splits_path = "/mnt/dataset0/thm/code/battleday_varimnist/data/splits.json"
-        
-        # 加载数据
-        features = np.load(features_path)
-        softlabels = np.load(softlabels_path)
-        
-        with open(splits_path, "r") as f:
-            splits = json.load(f)
-        
-        # 划分训练集和验证集
-        train_idx = splits["train"]
-        val_idx = splits["val"]
-        
-        X_train = features[train_idx]
-        y_train = softlabels[train_idx]
-        X_val = features[val_idx]
-        y_val = softlabels[val_idx]
-        
-    except Exception as e:
-        print(f"加载特征时出错: {e}")
-        print("请先运行数据预处理脚本和特征提取脚本!")
-        return
+    device = x.device
+    Ne = model.exemplars.shape[0]
+    B, D = x.shape
+    class_sims = torch.zeros(B, model.num_classes, device=device)
 
-    original_train_size = X_train.shape[0]
-    feature_dim = X_train.shape[1]
-    print(f"特征维度: {feature_dim}")
-    print(f"原始训练样本数: {original_train_size}")
-    print(f"验证样本数: {X_val.shape[0]}")
+    start = 0
+    while start < Ne:
+        end = min(start + block_size, Ne)
+        ex_block = model.exemplars[start:end]  # (nb, D)
+        labels_block = model.exemplar_labels[start:end]  # (nb,)
 
-    # --- 2. 准备 Exemplar 集合 (使用所有样本) ---
-    X_train_exemplars = X_train
-    y_train_exemplars = y_train
-    train_labels_exemplars = np.argmax(y_train_exemplars, axis=1)
-    
-    print(f"使用全部 {X_train_exemplars.shape[0]} 个样本作为 Exemplars")
+        nb = ex_block.shape[0]
+        # compute pairwise d2 between x and ex_block
+        x_exp = x.unsqueeze(1).expand(B, nb, D)  # (B, nb, D)
+        e_exp = ex_block.unsqueeze(0).expand(B, nb, D)
+        diff2 = (x_exp - e_exp) ** 2  # (B, nb, D)
 
-    # --- 3. 初始化模型 ---
-    model = ExemplarModel(
-        exemplars=X_train_exemplars,
-        labels=train_labels_exemplars,
-        feature_dim=feature_dim
-    ).to(device)
-    
-    # 只优化模型的可学习参数
-    optimizer = torch.optim.Adam([model.beta, model.gamma, model.Sigma_inv], lr=1e-2)
-    criterion = nn.KLDivLoss(reduction="batchmean")
-    
-    # --- 4. 内存优化设置 ---
-    train_batch_size = 16
-    eval_batch_size = 32
-    print(f"训练批处理大小: {train_batch_size}")
-    print(f"评估批处理大小: {eval_batch_size}")
-    
-    # --- 5. 训练循环 ---
-    model.train()
-    print("开始训练...")
-    checkpoint_dir = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/"
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, "epoch2_checkpoint.pth")  # 第二个epoch的保存路径
-    force_save_path = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/epoch1_force_save.pth"
-# 检查是否有第一个epoch的参数残留（即使从第2个epoch开始，内存可能还保留）
-    try:
-        torch.save({
-            "model_state_dict": model.state_dict(),  # 内存中的模型参数（可能是第一个epoch的）
-            "completed_epochs": 1,  
-            "note": "重启后强制保存，即使从第2个epoch开始"
-        }, force_save_path)
-        print(f"\n✅ 已强制保存第一个epoch的参数到：{force_save_path}")
-    except Exception as e:
-        print(f"强制保存第一个epoch参数失败：{e}，没关系，继续训练第2个epoch")
-    for epoch in range(epochs):
-        current_epoch = epoch + 1  # 显示用（1-based）
-        epoch_loss = 0
-        num_batches = 0
-        start_time = time.time()
-        
-        # 分批处理训练数据
-        for i in range(0, len(X_train_exemplars), train_batch_size):
-            X_batch = X_train_exemplars[i:i+train_batch_size]
-            y_batch = y_train_exemplars[i:i+train_batch_size]
-            
-            X_batch_tensor = torch.tensor(X_batch).float().to(device)
-            y_batch_tensor = torch.tensor(y_batch).float().to(device)
-            
-            optimizer.zero_grad()
-            preds = model(X_batch_tensor)
-            loss = criterion(torch.log(preds + 1e-8), y_batch_tensor)
-            loss.backward()
-            optimizer.step()
-            
-            epoch_loss += loss.item()
-            num_batches += 1
-        
-        epoch_time = time.time() - start_time
-        if epoch % 5 == 0 or epoch == epochs - 1:
-            avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
-            print(f"Epoch {epoch+1}/{epochs}, Average Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
+        if hasattr(model, 'w'):
+            w = model.w().to(device)  # (D,)
+            d2 = (diff2 * w.view(1, 1, -1)).sum(dim=2)  # (B, nb)
+        else:
+            d2 = diff2.sum(dim=2)  # (B, nb)
 
-        if epoch==0:  # 当完成第2个epoch时触发保存
-            backup_checkpoint_path = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/backup_epoch1.pth"
-            torch.save({
-                "model_state_dict": model.state_dict(),       # 模型参数
-                "optimizer_state_dict": optimizer.state_dict(), # 优化器状态
-                "completed_epochs": current_epoch,            # 已完成2个epoch
-                "loss": avg_loss,                             # 第2个epoch的损失
-                "time": epoch_time                            # 第2个epoch的耗时
-            }, backup_checkpoint_path)
-            print(f"\n===== 已自动保存第二个epoch的成果到: {backup_checkpoint_path} =====")
+        beta = model.beta()
+        sims = torch.exp(-beta * d2)  # (B, nb)
 
-        if current_epoch == 2:  # 当完成第2个epoch时触发保存
-            torch.save({
-                "model_state_dict": model.state_dict(),       # 模型参数
-                "optimizer_state_dict": optimizer.state_dict(), # 优化器状态
-                "completed_epochs": current_epoch,            # 已完成2个epoch
-                "loss": avg_loss,                             # 第2个epoch的损失
-                "time": epoch_time                            # 第2个epoch的耗时
-            }, checkpoint_path)
-            print(f"\n===== 已自动保存第二个epoch的成果到: {checkpoint_path} =====")
-            print(f"===== 可按Ctrl+C停止训练，开始优化代码，后续从该checkpoint续训 =====")
+        # scatter add to class_sims
+        labels_exp = labels_block.to(device).unsqueeze(0).expand(B, nb)  # (B, nb)
+        class_sims = class_sims.scatter_add(1, labels_exp, sims)
 
-    print("训练完成!")
+        start = end
 
-    # --- 6. 保存模型 ---
-    result_dir = "/mnt/dataset0/thm/code/battleday_varimnist/results"
-    os.makedirs(result_dir, exist_ok=True)
-    model_save_path = f"{result_dir}/exemplar_{model_name}_full.pth"
-    
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'exemplar_count': len(X_train_exemplars),
-        'feature_dim': feature_dim,
-        'beta': model.beta.item(),
-        'gamma': model.gamma.item(),
-        'Sigma_inv': model.Sigma_inv.detach().cpu().numpy()
-    }, model_save_path)
-    print(f"模型元数据已保存到: {model_save_path}")
+    logits = gamma * torch.log(class_sims + 1e-12)
+    return logits
 
-    # --- 7. 评估模型 ---
-    print("开始评估模型...")
-    model.eval()
-    all_preds = []
-    all_targets = []
+def save_results_to_json(args, final_metrics, best_val, epoch):
+    # 确保目录存在
+    results_dir = "/mnt/dataset0/thm/code/battleday_varimnist/results"
+    os.makedirs(results_dir, exist_ok=True)
     
-    # 释放缓存
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    with torch.no_grad():
-        # 分批处理验证数据
-        for i in range(0, len(X_val), eval_batch_size):
-            X_val_batch = X_val[i:i+eval_batch_size]
-            y_val_batch = y_val[i:i+eval_batch_size]
-            
-            X_val_tensor = torch.tensor(X_val_batch).float().to(device)
-            preds_batch = model(X_val_tensor)
-            
-            all_preds.append(preds_batch.cpu().numpy())
-            all_targets.append(y_val_batch)
-    
-    preds = np.vstack(all_preds)
-    targets = np.vstack(all_targets)
-    
-    # --- 8. 计算最终指标（使用 metrics 中的函数）---
-    top1_acc = compute_top1_accuracy(preds, targets)
-    exp_acc = compute_expected_accuracy(preds, targets)  # 来自 metrics
-    nll = compute_nll(preds, targets)  # 来自 metrics
-    spearman = compute_spearman_per_image(preds, targets)  # 来自 metrics
-    k = sum(p.numel() for p in model.parameters())
-    aic = compute_aic(nll, k)  # 来自 metrics
-    
-    print(f"验证集性能 ({model_name} + exemplar - Full Dataset):")
-    print(f"  Top-1 Accuracy: {top1_acc:.2f}%")
-    print(f"  Expected Accuracy: {exp_acc:.2f}%")
-    print(f"  NLL: {nll:.4f}")
-    print(f"  Spearman (per-image): {spearman:.4f}")
-    print(f"  AIC: {aic:.4f}")
-    print(f"  可学习参数数量: {k}")
-    total_storage_cost = X_train_exemplars.shape[0] * X_train_exemplars.shape[1] + train_labels_exemplars.shape[0]
-    print(f"  总存储成本 (Exemplars + Labels): {total_storage_cost}") 
-    
-    result_dict = {
-        "top1_accuracy": top1_acc,
-        "expected_accuracy": exp_acc,
-        "nll": nll,
-        "spearman": spearman,
-        "aic": aic,
-        "trainable_params": k,
-        "total_storage": total_storage_cost,
-        "num_exemplars": X_train_exemplars.shape[0]
+    # 准备结果数据
+    results = {
+        "model_type": args.model,
+        "final_epoch": epoch,
+        "best_val_nll": best_val,
+        "final_metrics": {
+            "val_nll": final_metrics['val_nll'],
+            "val_accuracy": final_metrics['val_acc'],
+            "val_top5_accuracy": final_metrics['val_top5']
+        },
+        "hyperparameters": {
+            "learning_rate": args.lr,
+            "batch_size": args.batch_size,
+            "epochs": args.epochs,
+            "patience": args.patience,
+            "gamma": args.gamma,
+            "block_size": args.block_size
+        }
     }
+    
+    # 生成文件名
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    filename = f"results_exemplar_{args.model}_{timestamp}.json"
+    filepath = os.path.join(results_dir, filename)
+    
+    # 保存JSON文件
+    with open(filepath, 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    print(f"Results saved to {filepath}")
+# === 新代码结束 ===
 
 
-     # --- 9. 保存结果到 JSON 文件 ---
-    results_file = "/mnt/dataset0/thm/code/battleday_varimnist/results/model_comparison_results.json"
-    os.makedirs(os.path.dirname(results_file), exist_ok=True)
+def save_checkpoint(state, path):
+    torch.save(state, path)
 
-    # 读取现有结果（如果存在）
-    if os.path.exists(results_file):
-        with open(results_file, 'r') as f:
-            all_results = json.load(f)
+
+def train(args):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # load features/labels for training (these are the inputs to the model; exemplars are separate)
+    features = torch.load(args.features)  # (N, D)
+    labels = torch.load(args.labels)      # (N,)
+
+    exemplars = torch.load(args.exemplar_features)  # (Ne, D)
+    exemplar_labels = torch.load(args.exemplar_labels)  # (Ne,)
+
+    D = features.shape[1]
+    C = int(exemplar_labels.max().item() + 1) if args.num_classes is None else args.num_classes
+
+    # Split dataset into train and validation
+    dataset = TensorDataset(features, labels)
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+    # Create data loaders with optimized configuration
+    train_loader = DataLoader(train_dataset, batch_size=512,
+                              shuffle=True, num_workers=8,
+                              pin_memory=True,
+                              persistent_workers=True,
+                              prefetch_factor=4)
+
+    val_loader = DataLoader(val_dataset, batch_size=512,
+                            num_workers=8, pin_memory=True,
+                            persistent_workers=True,
+                            prefetch_factor=4)
+
+    # choose model
+    if args.model.lower() == "noattention":
+        model = ExemplarNoAttention(exemplars.to(device), exemplar_labels.to(device),
+                                    feature_dim=D, num_classes=C).to(device)
+    elif args.model.lower() == "attention":
+        model = ExemplarAttention(exemplars.to(device), exemplar_labels.to(device),
+                                  feature_dim=D, num_classes=C).to(device)
     else:
-        # 初始化结果结构（与 visualize_results.py 一致）
-        all_results = {"prototype": {}, "exemplar": {}}
+        raise ValueError("Unknown model type for exemplar")
 
-    # 更新 exmeplar 部分的结果（使用模型名+训练方式作为键，如 'resnet18_full'）
-    result_key = f"{model_name}_full"  # 区分不同模型和训练配置
-    all_results["exemplar"][result_key] = result_dict
+    # optimizer: typically only attention weights and beta are learned
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scaler = GradScaler()
+    writer = SummaryWriter(log_dir=args.logdir)
 
-    # 写入文件
-    with open(results_file, 'w') as f:
-        json.dump(all_results, indent=2, fp=f)
-    print(f"评估结果已保存到: {results_file}")
+    start_epoch = 0
+    best_val = float("inf")
+    patience_counter = 0
 
-    return result_dict
+    # resume
+    if args.resume and os.path.exists(args.checkpoint):
+        ck = torch.load(args.checkpoint, map_location=device)
+        model.load_state_dict(ck["model_state"])
+        optimizer.load_state_dict(ck["optimizer_state"])
+        scaler.load_state_dict(ck["scaler_state"])
+        start_epoch = ck["epoch"] + 1
+        print(f"Resumed from epoch {start_epoch}")
+
+    for epoch in range(start_epoch, args.epochs):
+        model.train()
+        epoch_loss = 0.0
+        start_time = time.time()
+
+        for x, y in train_loader:
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+
+            # compute logits - use block wrapper if exemplars are large
+            with autocast():
+                if args.block_size is not None and model.exemplars.shape[0] > args.block_size:
+                    logits = logits_exemplar_in_blocks(model, x, gamma=args.gamma, block_size=args.block_size)
+                else:
+                    logits = model(x, gamma=args.gamma)  # may OOM if exemplars large
+
+                loss = F.nll_loss(F.log_softmax(logits, dim=1), y)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            epoch_loss += loss.item() * x.size(0)
+
+        epoch_loss = epoch_loss / len(train_loader.dataset)
+        elapsed = time.time() - start_time
+
+        # validation
+        model.eval()
+        val_loss = 0.0
+        all_logits = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for x, y in val_loader:
+                x, y = x.to(device), y.to(device)
+                with autocast():
+                    if args.block_size is not None and model.exemplars.shape[0] > args.block_size:
+                        logits = logits_exemplar_in_blocks(model, x, gamma=args.gamma, block_size=args.block_size)
+                    else:
+                        logits = model(x, gamma=args.gamma)
+                    loss = F.nll_loss(F.log_softmax(logits, dim=1), y, reduction='sum')
+                    val_loss += loss.item()
+                    all_logits.append(logits)
+                    all_labels.append(y)
+            
+            val_loss = val_loss / len(val_dataset)
+            all_logits = torch.cat(all_logits, dim=0)
+            all_labels = torch.cat(all_labels, dim=0)
+            
+            val_nll = F.nll_loss(F.log_softmax(all_logits, dim=1), all_labels, reduction='mean').item()
+            val_acc = accuracy(all_logits, all_labels)
+            val_top5 = topk_accuracy(all_logits, all_labels, k=5)
+
+        print(f"[Epoch {epoch}] train_loss={epoch_loss:.4f} val_nll={val_nll:.4f} val_acc={val_acc:.4f} time={elapsed:.1f}s")
+
+        # logging
+        writer.add_scalar("Loss/train", epoch_loss, epoch)
+        writer.add_scalar("NLL/val", val_nll, epoch)
+        writer.add_scalar("Accuracy/val", val_acc, epoch)
+        writer.add_scalar("Accuracy/val_top5", val_top5, epoch)
+
+        # save checkpoint
+        state = {
+            "epoch": epoch,
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "scaler_state": scaler.state_dict()
+        }
+        save_checkpoint(state, args.checkpoint)
+
+        # early stopping
+        if val_nll < best_val - args.early_stop_delta:
+            best_val = val_nll
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= args.patience:
+                print("Early stopping triggered.")
+                break
+
+    writer.close()
+    
+    # 保存最终评估结果到JSON文件
+    final_metrics = {
+        'val_nll': val_nll,
+        'val_acc': val_acc,
+        'val_top5': val_top5
+    }
+    save_results_to_json(args, final_metrics, best_val, epoch)
+
 
 if __name__ == "__main__":
-    train_exemplar_model('resnet18')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="attention", choices=["attention", "noattention"])
+    parser.add_argument("--features", type=str, default="data/features.pt")
+    parser.add_argument("--labels", type=str, default="data/labels.pt")
+    parser.add_argument("--exemplar_features", type=str, default="data/exemplars_features.pt")
+    parser.add_argument("--exemplar_labels", type=str, default="data/exemplars_labels.pt")
+    parser.add_argument("--num_classes", type=int, default=None)
+    parser.add_argument("--epochs", type=int, default=80)
+    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--logdir", type=str, default="./runs/exemplar")
+    parser.add_argument("--checkpoint", type=str, default="checkpoint_exemplar.pth")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--early_stop_delta", type=float, default=1e-4)
+    parser.add_argument("--block_size", type=int, default=8000, help="block size for exemplar chunks; set None to disable block-mode")
+    parser.add_argument("--gamma", type=float, default=1.0, help="gamma scaling for choice rule (can be tuned)")
+    args = parser.parse_args()
+    # convert string "None" to None if necessary
+    if isinstance(args.block_size, str) and args.block_size.lower() == "none":
+        args.block_size = None
+    train(args)
