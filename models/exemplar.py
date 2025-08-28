@@ -64,8 +64,13 @@ class ExemplarModel(nn.Module):
                 diff = query - exemplar_batch  # (1, B_e, D)
                 # 注意：Sigma_inv 也需要在相同设备上
                 weighted_diff = diff * self.Sigma_inv.to(device)  # (1, B_e, D)
-                distances = torch.sum(weighted_diff * diff, dim=2)  # (1, B_e)
-                
+                # print(f"weighted_diff shape: {weighted_diff.shape}")
+                # print(f"diff shape: {diff.shape}")
+                #distances = torch.sum(weighted_diff * diff, dim=2)  # (1, B_e)
+                product = weighted_diff * diff
+                # 使用安全的维度索引
+                sum_dim = min(2, product.dim() - 1)
+                distances = torch.sum(product, dim=sum_dim)
                 # 3. 计算相似度 (注意力权重)
                 batch_similarities = torch.exp(-self.beta.to(device) * distances.squeeze(0))  # (B_e,)
                 

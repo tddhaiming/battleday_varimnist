@@ -179,7 +179,22 @@ def train_exemplar_model(model_name='resnet18', epochs=80):
     # --- 5. 训练循环 ---
     model.train()
     print("开始训练...")
+    checkpoint_dir = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_path = os.path.join(checkpoint_dir, "epoch2_checkpoint.pth")  # 第二个epoch的保存路径
+    force_save_path = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/epoch1_force_save.pth"
+# 检查是否有第一个epoch的参数残留（即使从第2个epoch开始，内存可能还保留）
+    try:
+        torch.save({
+            "model_state_dict": model.state_dict(),  # 内存中的模型参数（可能是第一个epoch的）
+            "completed_epochs": 1,  
+            "note": "重启后强制保存，即使从第2个epoch开始"
+        }, force_save_path)
+        print(f"\n✅ 已强制保存第一个epoch的参数到：{force_save_path}")
+    except Exception as e:
+        print(f"强制保存第一个epoch参数失败：{e}，没关系，继续训练第2个epoch")
     for epoch in range(epochs):
+        current_epoch = epoch + 1  # 显示用（1-based）
         epoch_loss = 0
         num_batches = 0
         start_time = time.time()
@@ -205,7 +220,29 @@ def train_exemplar_model(model_name='resnet18', epochs=80):
         if epoch % 5 == 0 or epoch == epochs - 1:
             avg_loss = epoch_loss / num_batches if num_batches > 0 else 0
             print(f"Epoch {epoch+1}/{epochs}, Average Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
-    
+
+        if epoch==0:  # 当完成第2个epoch时触发保存
+            backup_checkpoint_path = "/mnt/dataset0/thm/code/battleday_varimnist/results/checkpoints/backup_epoch1.pth"
+            torch.save({
+                "model_state_dict": model.state_dict(),       # 模型参数
+                "optimizer_state_dict": optimizer.state_dict(), # 优化器状态
+                "completed_epochs": current_epoch,            # 已完成2个epoch
+                "loss": avg_loss,                             # 第2个epoch的损失
+                "time": epoch_time                            # 第2个epoch的耗时
+            }, backup_checkpoint_path)
+            print(f"\n===== 已自动保存第二个epoch的成果到: {backup_checkpoint_path} =====")
+
+        if current_epoch == 2:  # 当完成第2个epoch时触发保存
+            torch.save({
+                "model_state_dict": model.state_dict(),       # 模型参数
+                "optimizer_state_dict": optimizer.state_dict(), # 优化器状态
+                "completed_epochs": current_epoch,            # 已完成2个epoch
+                "loss": avg_loss,                             # 第2个epoch的损失
+                "time": epoch_time                            # 第2个epoch的耗时
+            }, checkpoint_path)
+            print(f"\n===== 已自动保存第二个epoch的成果到: {checkpoint_path} =====")
+            print(f"===== 可按Ctrl+C停止训练，开始优化代码，后续从该checkpoint续训 =====")
+
     print("训练完成!")
 
     # --- 6. 保存模型 ---
