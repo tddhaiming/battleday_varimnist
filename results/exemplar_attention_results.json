@@ -1,0 +1,31 @@
+{
+    "model_type": "exemplar",
+    "exemplar_type": "attention",
+    "feature_dim": 512,
+    "num_classes": 10,
+    "best_epoch": 80,
+    "best_metrics": {
+        "epoch": 80,
+        "loss": 1.3120600150361932,
+        "acc": 0.5505085133127643,
+        "top5_acc": 0.9290938176995427,
+        "sba": 0.18180779339504058
+    },
+    "final_metrics": {
+        "loss": 1.312060040319297,
+        "acc": 0.5505085133127643,
+        "top5_acc": 0.9290938176995427,
+        "sba": 0.18180779339504058
+    },
+    "hyperparameters": {
+        "batch_size": 256,
+        "num_workers": 8,
+        "epochs": 80,
+        "lr": 0.001,
+        "weight_decay": 0.0,
+        "chunk_size": 8192,
+        "val_check_every": 5,
+        "patience_checks": 3,
+        "cache_exemplar_to_gpu": true
+    }
+}

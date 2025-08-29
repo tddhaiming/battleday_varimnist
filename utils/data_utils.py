@@ -1,54 +1,39 @@
-# utils/data_utils.py
+""" utils/data_utils.py
+功能：读取.pt特征/标签并返回 DataLoader；Dataset支持 lazy load在 DataLoader worker中把 tensor 加载到内存中以避免主进程瓶颈
+""" #新代码
 import os
-import pandas as pd
-import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader, TensorDataset
-from torchvision import transforms
-import json
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
 
-def load_processed_data():
-    """加载预处理后的数据"""
-    images_path = "/content/gdrive/MyDrive/battleday_varimnist/data/processed/images.npy"
-    softlabels_path = "/content/gdrive/MyDrive/battleday_varimnist/data/processed/softlabels.npy"
-    
-    if os.path.exists(images_path) and os.path.exists(softlabels_path):
-        images = np.load(images_path)
-        softlabels = np.load(softlabels_path)
-        return images, softlabels
-    else:
-        return None, None
+class FeatureDataset(Dataset):
+    def __init__(self, feat_path, label_path=None):
+        self.feat_path = feat_path
+        self.label_path = label_path
+        self._feats = None
+        self._labels = None
 
-def load_splits():
-    """加载数据划分"""
-    splits_path = "/content/gdrive/MyDrive/battleday_varimnist/data/splits.json"
-    if os.path.exists(splits_path):
-        with open(splits_path, "r") as f:
-            return json.load(f)
-    return None
+    def load_data(self): # lazy loading in worker
+        if self._feats is None:
+            self._feats = torch.load(self.feat_path).float()
+        if self.label_path and self._labels is None:
+            self._labels = torch.load(self.label_path).long()
 
-def get_train_val_features(model_name='resnet18'):
-    """获取训练和验证集的特征"""
-    # 加载特征
-    try:
-        features = np.load(f"/mnt/dataset0/thm/code/battleday_varimnist/features/{model_name}_features.npy")
-        softlabels = np.load("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy")
-        splits = load_splits()
-        
-        if splits is None:
-            raise FileNotFoundError("请先运行数据预处理脚本")
-            
-        # 划分数据
-        train_idx = splits["train"]
-        val_idx = splits["val"]
-        
-        X_train = features[train_idx]
-        y_train = softlabels[train_idx]
-        X_val = features[val_idx]
-        y_val = softlabels[val_idx]
-        
-        return X_train, y_train, X_val, y_val
-        
-    except Exception as e:
-        print(f"加载特征时出错: {e}")
-        return None, None, None, None
+    def __len__(self):
+        self.load_data()
+        return self._feats.size(0)
+
+    def __getitem__(self, idx):
+        self.load_data()
+        feat = self._feats[idx]
+        if self._labels is not None:
+            label = self._labels[idx]
+            return feat, label
+        return feat
+
+def make_dataloader(feat_path, label_path=None, batch_size=256, num_workers=8, shuffle=False, drop_last=False,prefetch_factor=4,pin_memory=True):
+    ds = FeatureDataset(feat_path, label_path)
+    # persistent_workers在非空DataLoader下能避免反复创建/销毁worker进程开销
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
+                    pin_memory=pin_memory, drop_last=drop_last, persistent_workers=(num_workers > 0), prefetch_factor=prefetch_factor)
+    return dl

@@ -1,168 +1,159 @@
-# # models/prototype.py
-# import torch
-# import torch.nn as nn
-# import numpy as np
-
-# class PrototypeModel(nn.Module):
-#     def __init__(self, num_classes=10, feature_dim=512, mode="classic"):
-#         super().__init__()
-#         self.num_classes = num_classes
-#         self.feature_dim = feature_dim
-#         self.mode = mode
-        
-#         # 初始化原型向量
-#         self.prototypes = nn.Parameter(torch.randn(num_classes, feature_dim))
-        
-#         # 根据模式设置协方差矩阵
-#         if mode == "linear":
-#             self.Sigma_inv = nn.Parameter(torch.ones(feature_dim))
-#         elif mode == "quadratic":
-#             self.Sigma_inv = nn.Parameter(torch.ones(num_classes, feature_dim))
-#         else:  # classic
-#             self.register_buffer("Sigma_inv", torch.ones(feature_dim))
-        
-#         self.gamma = nn.Parameter(torch.tensor(1.0))
-
-#     def mahalanobis_distance(self, x, prototype, class_idx=None):
-#         """计算马氏距离"""
-#         diff = x - prototype  # (B, D)
-        
-#         if self.mode == "quadratic" and class_idx is not None:
-#             weighted = diff * self.Sigma_inv[class_idx]
-#         elif self.mode == "linear":
-#             weighted = diff * self.Sigma_inv
-#         else:
-#             weighted = diff  # Euclidean distance
-        
-#         return torch.sum(weighted * diff, dim=1)  # (B,)
-
-#     def forward(self, x):
-#         # x: (B, D)
-#         distances = []
-#         for i in range(self.num_classes):
-#             dist = self.mahalanobis_distance(x, self.prototypes[i], i)
-#             distances.append(dist)
-        
-#         distances = torch.stack(distances, dim=1)  # (B, C)
-#         logits = -self.gamma * distances
-#         return torch.softmax(logits, dim=1)
 # models/prototype.py
 """
-Prototype models (Classic / Linear / Quadratic) implemented per Battleday et al. (2020).
+Prototype models (Classic / Linear / Quadratic) per Battleday et al., 2020.
 
-Place this file in: models/prototype.py
+实现要点（与论文对应）：
+- Classic: Σ = σ^2 I（等价于欧氏距离），只有 gamma 可学（这里实现 gamma 可学或可固定）
+- Linear: Σ = diag(1/c)（论文中写成 Σ^-1 = diag(c)），共享对角精度向量 c（全局可学）
+- Quadratic: 每类 Σ_c = diag(1/c_c)，即每类有独立对角精度向量 c_c
 
-Notes:
-- prototypes: tensor of shape (num_classes, feature_dim) (empirical means)
-- All new code blocks are delimited with "# === 新代码开始 ===" and "# === 新代码结束 ==="
-- If you want prototypes to be learnable, set flags (not done by default).
+接口：
+- 初始化传入 feature_dim, num_classes
+- build_prototypes_from_features(features, labels) : 从训练集中计算 μ_c（prototype）并保存
+- forward(x) -> logits (B, C)  输出为可以直接用于 CrossEntropyLoss 的 logits（越大越倾向该类）
+
+注意：
+- c 参数采用正值参数化（softplus），确保正定
+- gamma 为缩放参数（>0），参数化为 softplus 以保证正
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# === 旧代码注释（如果之前仓库中有旧实现，可在此处保留/粘贴并注释） ===
-# class PrototypeModelOld:
-#     def __init__(...):
-#         ...
-#     def forward(self, x):
-#         ...
-# === 旧代码结束 ===
-
+EPS = 1e-9
 
 class BasePrototype(nn.Module):
-    def __init__(self, prototypes: torch.Tensor, feature_dim: int, num_classes: int):
-        """
-        prototypes: tensor (num_classes, feature_dim)  -- empirical prototypes (means)
-        """
+    def __init__(self, feature_dim, num_classes, learn_gamma=False, init_gamma=1.0):
         super().__init__()
-        self.register_buffer("prototypes", prototypes)  # fixed empirical prototypes
         self.feature_dim = feature_dim
         self.num_classes = num_classes
-
-    def mahalanobis_diag(self, x, inv_diag):
-        """
-        compute Mahalanobis distance (squared) with diagonal inverse covariance.
-        x: (batch, feature_dim)
-        inv_diag: shape (feature_dim,) or (num_classes, feature_dim)
-        returns: d (batch, num_classes)
-        """
-        B = x.shape[0]
-        C = self.prototypes.shape[0]
-        # expand to (B, C, D)
-        x_exp = x.unsqueeze(1).expand(B, C, self.feature_dim)   # (B,C,D)
-        p_exp = self.prototypes.unsqueeze(0).expand(B, C, self.feature_dim)
-        diff = x_exp - p_exp  # (B,C,D)
-        # inv_diag: (D,) or (C,D)
-        if inv_diag.dim() == 1:
-            # (D,) -> broadcast
-            d2 = (diff * diff) * inv_diag.view(1, 1, -1)
+        # prototypes μ_c stored as buffer (C, D)
+        self.register_buffer('prototypes', torch.zeros(num_classes, feature_dim))
+        # gamma: response scaling parameter (positive)
+        if learn_gamma:
+            self.gamma_unconstrained = nn.Parameter(torch.log(torch.exp(torch.tensor(init_gamma)) - 1.0))  # inverse softplus init
+            self.learn_gamma = True
         else:
-            # (C,D) -> expand to (B,C,D)
-            d2 = (diff * diff) * inv_diag.unsqueeze(0)
-        d = d2.sum(dim=2)  # (B, C) squared Mahalanobis distance
-        return d
+            self.register_buffer('gamma_const', torch.tensor(float(init_gamma)))
+            self.learn_gamma = False
+
+    def get_gamma(self):
+        if self.learn_gamma:
+            return F.softplus(self.gamma_unconstrained) + EPS
+        else:
+            return self.gamma_const
+
+    def build_prototypes_from_features(self, features, labels):
+        """
+        features: Tensor (N, D)
+        labels: LongTensor (N,)
+        -> compute per-class mean prototypes and store to self.prototypes (on cpu buffer)
+        """
+        C = self.num_classes
+        D = self.feature_dim
+        device = features.device
+        prot = torch.zeros(C, D, device=device)
+        for c in range(C):
+            mask = (labels == c)
+            if mask.any():
+                prot[c] = features[mask].mean(dim=0)
+            else:
+                prot[c] = torch.zeros(D, device=device)
+        # store on cpu buffer for consistency
+        self.prototypes = prot.cpu()
+
+    def forward(self, x):
+        """
+        x: (B, D)
+        returns logits (B, C)
+        Default implementation: negative Mahalanobis distance using prototypes
+        Subclasses override distance computation (e.g., with learned c vectors)
+        """
+        raise NotImplementedError("Use subclass implementations")
 
 
-# === 新代码开始 ===
 class ClassicPrototype(BasePrototype):
     """
-    Classic: Σ = σ^2 I (identity) -> Euclidean distance.
-    No learnable variance parameters. Only gamma (response scaling) provided at forward.
+    Classic prototype: Euclidean distance (Σ = σ^2 I fixed).
+    Only gamma (response scaling) optionally learned here.
+    distance = ||x - mu||^2  (we use squared or euclid; we use squared)
+    logits = gamma * (-distance)
     """
-    def __init__(self, prototypes, feature_dim, num_classes):
-        super().__init__(prototypes, feature_dim, num_classes)
+    def __init__(self, feature_dim, num_classes, learn_gamma=True, init_gamma=1.0):
+        super().__init__(feature_dim, num_classes, learn_gamma=learn_gamma, init_gamma=init_gamma)
 
-    def forward(self, x, gamma=1.0):
-        inv_diag = torch.ones(self.feature_dim, device=x.device)  # identity inverse diag
-        d = self.mahalanobis_diag(x, inv_diag)  # (B, C)
-        logits = -gamma * d  # similarity ~ exp(-d); logits = -gamma * d
+    def forward(self, x):
+        # check dimension
+        if x.dim() != 2 or x.shape[1] != self.feature_dim:
+            raise ValueError(f'Input feature dim mismatch {x.shape} vs {self.feature_dim}')
+        proto = self.prototypes.to(x.device)  # (C, D)
+        # squared euclid distances: (B, C)
+        d2 = torch.cdist(x, proto, p=2) ** 2
+        gamma = self.get_gamma()
+        logits = - gamma * d2
         return logits
 
 
 class LinearPrototype(BasePrototype):
     """
-    Linear: shared diagonal inverse covariance Σ^{-1} = diag(c) across classes.
-    Learnable parameter: c (D,) constrained >0.
+    Linear prototype: shared diagonal Mahalanobis (Σ^-1 = diag(c)), learn c (D,)
+    Parameters learned: c (D,) positive, gamma
+    distance = sum_k c_k * (x_k - mu_k)^2
     """
-    def __init__(self, prototypes, feature_dim, num_classes, init_c=None):
-        super().__init__(prototypes, feature_dim, num_classes)
-        if init_c is None:
-            init_c = torch.ones(feature_dim)
-        # parameterize c via inverse-softplus: store raw and apply softplus
-        self.c_raw = nn.Parameter(torch.log(torch.exp(init_c) - 1.0))
+    def __init__(self, feature_dim, num_classes, learn_gamma=True, init_gamma=1.0, init_c=1.0):
+        super().__init__(feature_dim, num_classes, learn_gamma=learn_gamma, init_gamma=init_gamma)
+        # parameterize c via softplus to ensure positive
+        self.c_unconstrained = nn.Parameter(torch.ones(feature_dim) * float(init_c))  # # 新代码: 可学对角精度向量（共享）
+        # note: no prototypes stored here initially; build from data as usual
 
-    def inv_diag(self):
-        # returns positive vector (D,)
-        return F.softplus(self.c_raw)
+    def get_c(self):
+        # positive vector
+        return F.softplus(self.c_unconstrained) + EPS
 
-    def forward(self, x, gamma=1.0):
-        inv_d = self.inv_diag()  # (D,)
-        d = self.mahalanobis_diag(x, inv_d)  # (B,C)
-        logits = -gamma * d
+    def forward(self, x):
+        if x.dim() != 2 or x.shape[1] != self.feature_dim:
+            raise ValueError(f'Input feature dim mismatch {x.shape} vs {self.feature_dim}')
+        proto = self.prototypes.to(x.device)  # (C, D)
+        # compute per-class Mahalanobis-like squared distance efficiently:
+        # (x - mu)^2 -> expand: (B, C, D)
+        # compute weighted sum over D by c
+        c = self.get_c().to(x.device)  # (D,)
+        # compute squared diffs then weight
+        # x: (B, D), proto: (C, D)
+        # use broadcasting
+        dif = x.unsqueeze(1) - proto.unsqueeze(0)  # (B, C, D)
+        d2w = (dif * dif) * c.unsqueeze(0).unsqueeze(0)  # (B, C, D)
+        d = d2w.sum(dim=2)  # (B, C)
+        gamma = self.get_gamma()
+        logits = - gamma * d
         return logits
 
 
 class QuadraticPrototype(BasePrototype):
     """
-    Quadratic: per-class diagonal inverse covariance Σ_C^{-1} = diag(ci) for each class i.
-    Learnable parameter: ci for each class (C x D), constrained >0.
+    Quadratic prototype: per-class diagonal Mahalanobis (Σ_c^-1 = diag(c_c)), learn c_c (C, D)
+    Parameters learned: c_c (C, D), gamma
+    distance for class c: sum_k c_c[k] * (x_k - mu_c[k])^2
     """
-    def __init__(self, prototypes, feature_dim, num_classes, init_ci=None):
-        super().__init__(prototypes, feature_dim, num_classes)
-        if init_ci is None:
-            # default initialize to ones
-            init_ci = torch.ones(num_classes, feature_dim)
-        self.ci_raw = nn.Parameter(torch.log(torch.exp(init_ci) - 1.0))  # (C, D)
+    def __init__(self, feature_dim, num_classes, learn_gamma=True, init_gamma=1.0, init_cc=1.0):
+        super().__init__(feature_dim, num_classes, learn_gamma=learn_gamma, init_gamma=init_gamma)
+        # per-class per-dim unconstrained parameters
+        # shape (C, D)
+        self.cc_unconstrained = nn.Parameter(torch.ones(num_classes, feature_dim) * float(init_cc))  # # 新代码: per-class diagonal precision
 
-    def inv_diag(self):
-        # returns (C, D)
-        return F.softplus(self.ci_raw)
+    def get_cc(self):
+        return F.softplus(self.cc_unconstrained) + EPS  # (C, D)
 
-    def forward(self, x, gamma=1.0):
-        inv_diags = self.inv_diag()  # (C, D)
-        d = self.mahalanobis_diag(x, inv_diags)  # (B, C)
-        logits = -gamma * d
+    def forward(self, x):
+        if x.dim() != 2 or x.shape[1] != self.feature_dim:
+            raise ValueError(f'Input feature dim mismatch {x.shape} vs {self.feature_dim}')
+        proto = self.prototypes.to(x.device)  # (C, D)
+        cc = self.get_cc().to(x.device)  # (C, D)
+        # compute (B, C, D) diffs
+        dif = x.unsqueeze(1) - proto.unsqueeze(0)
+        d2w = (dif * dif) * cc.unsqueeze(0)  # broadcast (B,C,D)
+        d = d2w.sum(dim=2)  # (B,C)
+        gamma = self.get_gamma()
+        logits = - gamma * d
         return logits
-# === 新代码结束 ===

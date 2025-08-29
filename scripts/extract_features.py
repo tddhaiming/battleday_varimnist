@@ -1,91 +1,118 @@
-# scripts/extract_features.py
-import torch
-import torch.nn as nn
-import numpy as np
+""" extract_features.py
+功能：读取 data/processed/dataset_index.pt，使用 ResNet18 特征提取器把图像转为 vector features，并保存为 features/*.pt
+输出文件：
+ - features/train_features.pt (Tensor float32 (N_train, D))
+ - features/train_labels.pt (LongTensor (N_train,))
+ - features/val_features.pt
+ - features/val_labels.pt
+ - features/exemplar_features.pt -> 默认等于 train_features (用于 ExemplarModel)
+ - features/exemplar_labels.pt
+注意：请确保 FEATURE_DIM 与模型初始化时一致。
+""" #新代码
 import os
-from torchvision.models import resnet18, vgg11
-from torchvision import transforms
+import argparse
+from PIL import Image
+import torch
+from torch import nn
+from torchvision import transforms, models # 新增 models 导入
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-def get_pretrained_feature_extractor(model_name='resnet18'):
-    """获取预训练特征提取器"""
-    if model_name == 'resnet18':
-        # 使用 ResNet18
-        model = resnet18(pretrained=True)
-        # 修改第一层以适应灰度图像
-        model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        # 移除最后的分类层
-        model.fc = nn.Identity()
-        feature_dim = 512
-    elif model_name == 'vgg11':
-        # 使用 VGG11
-        model = vgg11(pretrained=True)
-        # 修改第一层
-        model.features[0] = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        # 移除分类器的最后一层
-        model.classifier[-1] = nn.Identity()
-        feature_dim = 4096
-    else:
-        raise ValueError(f"不支持的模型: {model_name}")
-    
-    return model, feature_dim
+# 注意：SimpleCNNFeatureExtractor 已被移除
 
-def extract_features_with_pretrained(model_name='resnet18'):
-    """使用预训练模型提取特征"""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"使用设备: {device}")
-    
-    # 获取预训练模型
-    model, feature_dim = get_pretrained_feature_extractor(model_name)
-    model = model.to(device)
-    
-    # 冻结所有参数
-    for param in model.parameters():
-        param.requires_grad = False
-    
-    model.eval()
-    
-    # 加载 variMNIST 数据
-    try:
-        images = np.load("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/images.npy")
-        softlabels = np.load("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy")
-    except:
-        print("请先运行数据预处理脚本!")
-        return
-    
-    print(f"加载图像数据: {images.shape}")
-    
-    # 预处理图像
-    images_tensor = torch.tensor(images).float() / 255.0
-    if images_tensor.dim() == 3:
-        images_tensor = images_tensor.unsqueeze(1)  # 添加通道维度
-    
-    # 标准化 (使用 ImageNet 的均值和标准差，但适应灰度图)
-    normalize = transforms.Normalize(mean=[0.485], std=[0.229])  # 近似值
-    images_tensor = normalize(images_tensor)
-    
-    # 提取特征
-    features = []
-    batch_size = 32  # 减小 batch size 以适应 GPU 内存
-    
-    with torch.no_grad():
-        for i in tqdm(range(0, len(images_tensor), batch_size), desc="提取特征"):
-            batch = images_tensor[i:i+batch_size].to(device)
-            batch_features = model(batch)
-            features.append(batch_features.cpu().numpy())
-    
-    features = np.vstack(features)
-    
-    # 保存特征
-    os.makedirs("/mnt/dataset0/thm/code/battleday_varimnist/features", exist_ok=True)
-    np.save(f"/mnt/dataset0/thm/code/battleday_varimnist/features/{model_name}_features.npy", features)
-    np.save("/mnt/dataset0/thm/code/battleday_varimnist/data/processed/softlabels.npy", softlabels)  # 确保标签也被保存
-    
-    print(f"特征提取完成!")
-    print(f"特征形状: {features.shape}")
-    print(f"标签形状: {softlabels.shape}")
-    print(f"使用的模型: {model_name}")
+class ImageListDataset(Dataset):
+    def __init__(self, items, transform=None):
+        self.items = items
+        self.transform = transform
 
-if __name__ == "__main__":
-    # 使用 ResNet18 提取特征
-    extract_features_with_pretrained('resnet18')
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx):
+        it = self.items[idx]
+        # 原始图像是灰度图 (L)
+        img = Image.open(it['path']).convert('L')
+        if self.transform:
+            img = self.transform(img)
+        label = int(it['label'])
+        return img, label, it['id']
+
+def extract(meta_path, out_dir='features', feature_dim=512, batch_size=256, num_workers=8, device='cuda'):
+    os.makedirs(out_dir, exist_ok=True)
+    meta = torch.load(meta_path)
+    items = meta['items']
+
+    # 拆分
+    splits = {'train': [], 'val': [], 'test': []}
+    for it in items:
+        splits[it['split']].append(it)
+
+    # --- 只使用 ResNet18 ---
+    # 加载预训练的 ResNet18 模型
+    model = models.resnet18(pretrained=True)
+    # 替换最后的全连接层以输出指定的 feature_dim
+    # ResNet 的 fc 层输入维度通常是 512 (对于 resnet18/34)
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, feature_dim) # 替换为输出 feature_dim 的线性层
+
+    # 对于 ResNet，输入需要是 3 通道 RGB 图像
+    # 因此，transform 需要先将灰度图转为 RGB
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)), # ResNet 通常使用 224x224 输入
+        transforms.Grayscale(num_output_channels=3), # 将单通道转为三通道
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet 标准化
+    ])
+    print(f"Loaded pretrained ResNet18, modified final layer to output {feature_dim} dims.")
+    # --- 结束 ResNet18 配置 ---
+
+    device = torch.device(device if torch.cuda.is_available() else 'cpu')
+    model.to(device).eval()
+
+    for split_name in ['train', 'val', 'test']:
+        split_items = splits[split_name]
+        if len(split_items) == 0:
+            continue
+        ds = ImageListDataset(split_items, transform=transform) # 使用 ResNet 对应的 transform
+        loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+
+        all_feats = []
+        all_labels = []
+        all_ids = []
+        with torch.no_grad():
+            for imgs, labels, ids in tqdm(loader, desc=f'extract {split_name}'):
+                imgs = imgs.to(device, non_blocking=True)
+                feats = model(imgs)
+                feats = feats.cpu()
+                all_feats.append(feats)
+                all_labels.append(labels)
+                all_ids.extend(ids)
+
+        feats = torch.cat(all_feats, dim=0)
+        labs = torch.cat(all_labels, dim=0).long()
+
+        torch.save(feats, os.path.join(out_dir, f'{split_name}_features.pt'))
+        torch.save(labs, os.path.join(out_dir, f'{split_name}_labels.pt'))
+        torch.save(all_ids, os.path.join(out_dir, f'{split_name}_ids.pt'))
+        print(f'saved {split_name} features: {feats.shape} -> {out_dir}/{split_name}_features.pt')
+
+    # exemplar bank 默认使用 train features
+    if os.path.exists(os.path.join(out_dir, 'train_features.pt')):
+        torch.save(torch.load(os.path.join(out_dir, 'train_features.pt')), os.path.join(out_dir, 'exemplar_features.pt'))
+        torch.save(torch.load(os.path.join(out_dir, 'train_labels.pt')), os.path.join(out_dir, 'exemplar_labels.pt'))
+        print('saved exemplar bank from train set')
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--meta', type=str, default='data/processed/dataset_index.pt')
+    parser.add_argument('--out', type=str, default='features')
+    parser.add_argument('--feature-dim', type=int, default=512)
+    parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--num-workers', type=int, default=8)
+    # --- 移除了 --model-type 参数 ---
+    args = parser.parse_args()
+    # --- 调用 extract 时不再传递 model_type ---
+    extract(args.meta, out_dir=args.out, feature_dim=args.feature_dim, batch_size=args.batch_size,
+            num_workers=args.num_workers) # 移除了 model_type 参数
