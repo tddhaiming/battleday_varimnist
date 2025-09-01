@@ -183,8 +183,8 @@ def plot_single_bar_chart(data, metric_key, metric_name, output_dir):
 def main():
     """主函数"""
     # 1. 设置路径
-    results_dir = '/mnt/dataset0/thm/code/battleday_varimnist/results/final' # 指定你的 JSON 文件目录
-    output_dir = '/mnt/dataset0/thm/code/battleday_varimnist/results/final/charts_final_only_ce_aic' # 修改输出目录名
+    results_dir = '/mnt/dataset0/thm/code/battleday_varimnist/results/new' # 指定你的 JSON 文件目录
+    output_dir = '/mnt/dataset0/thm/code/battleday_varimnist/results/new/charts_final_only_ce_aic' # 修改输出目录名
     os.makedirs(output_dir, exist_ok=True) # 确保输出目录存在
 
     # 2. 加载数据
